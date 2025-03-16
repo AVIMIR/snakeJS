@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+    <html>
+        <head></head>
+        <body align="center">
+            <canvas id="gameCanvas" width="800" height="800" style="border: 1px solid black"></canvas>
+
+
+            <script>
+                class Node {
+                    constructor (value=null, prev=null, next=null) {
+                        this.value = value;
+                        this.next = next;
+                        this.prev = prev;
+                    }
+                }
+                class LinkedList {
+                    constructor (...values) {
+                        this.head = null;
+                        this.tail = this.head;
+                        this.length = 0;
+                        if (values.length > 0) {
+                            for (let value of values) {
+                                this.appendRight(value);
+                            }
+                        }
+                    }
+                    map(func) {
+                        var modifiedList = new LinkedList();
+                        let tail = this.head;
+
+                        while (tail != null) {
+                            modifiedList.appendRight(func(tail));
+                            tail = tail.next;
+                        }
+
+                        return modifiedList;
+                    }
+                    copy() {
+                        return this.map(x => x);
+                    }
+                    appendRight(object) {
+                        // if (object instanceof LinkedList) {
+                        //     throw "CANNOT CONCATENATE LISTS";
+                        // }
+
+                        var value;
+                        if (object instanceof Node) {
+                            value = object.value;
+                        } else {
+                            value = object;
+                        }
+
+                        if (this.head === null) {
+                            this.head = new Node(value);
+                            this.tail = this.head;
+                        } else {
+                            this.tail.next = new Node(value, this.tail);
+                            this.tail = this.tail.next;
+                        }
+                        this.length++;
+                    }
+                    appendLeft(object) {
+                        // if (object instanceof LinkedList) {
+                        //     throw "CANNOT CONCATENATE LISTS";
+                        // }
+
+                        var value;
+                        if (object instanceof Node) {
+                            value = object.value;
+                        } else {
+                            value = object;
+                        }
+
+                        if (this.head === null) {
+                            this.appendRight(value);
+                        } else {
+                            var newHead = new Node(value, null, this.head);
+                            this.head.prev = newHead;
+                            this.head = newHead;
+                            this.length++;
+                        }
+
+                    }
+                    popLeft() {
+                        if (this.head === null) {
+                            return null;
+                        }
+
+                        let value = this.head.value;
+                        this.head = this.head.next;
+                        if (this.head !== null) {
+                            this.head.prev = null;
+                        }
+                        this.length--;
+                        return value;
+                    }
+                    popRight() {
+                        if (this.tail === null) {
+                            return null;
+                        }
+
+                        let value = this.tail.value;
+                        this.tail = this.tail.prev;
+                        if (this.tail !== null) {
+                            this.tail.next = null;
+                        }
+
+                        this.length--;
+                        return value;
+                    }
+                }
+
+                const START_X = 3;
+                const START_Y = 3;
+                const START_LENGTH = 3;
+                const FOOD_LENGTH = 2;
+
+                const FIELD_SIDE = 40;
+                const CELL_SIDE =  20;
+
+
+                const Maybe = value => ({
+                    isJust: value !== null && value !== undefined,
+                    map: f => (value != null ? Maybe(f(value)) : Maybe(null)),
+                    chain: f => (value != null ? f(value) : Maybe(null)),
+                    get: def => (value != null ? value : def),
+                });
+
+                const InputMonad = target => ({
+                    subscribe: (eventType, handler) => {
+                        target.addEventListener(eventType, handler);
+                        return InputMonad(target);
+                    },
+
+                    map: f => InputMonad(f(target)),
+                    get: () => target,
+                });
+
+                const CanvasMonad = canvas => ({
+                    isJust: canvas !== null && canvas !== undefined,
+                    map: f => (canvas != null ? InputMonad(f(canvas)) : InputMonad(null)),
+                    chain: f => (canvas != null ? f(canvas) : InputMonad(null)),
+                    get: def => (canvas != null ? canvas : def),
+                    getContext: def => (canvas != null ? canvas.getContext("2d") : def),
+                });
+
+
+                
+                const isInBounds = coord => (coord >= 0 && coord <= FIELD_SIDE-1);
+                const createEntitySegment = (x, y) => {
+                    if (!isInBounds(x) || !isInBounds(y)) {
+                        throw "OUT OF BOUNDS";
+                        return null;
+                    }
+                    
+                    return { 
+                        position: {
+                            x: x,
+                            y: y,
+                        }
+                    };
+                };
+                
+                const createEntity = type => (x, y, length) => {
+                    var entityBody = new LinkedList();
+                    
+                    for (let i=0; i<length; i++) {
+                        if (!isFree[y][x-i][0]) {
+                            throw "THIS PLACE IS BUSY";
+                            return null;
+                        }
+                        isFree[y][x] = [false, type];
+                    
+                        entityBody.appendRight(createEntitySegment(x-i, y));
+                    }
+                    return {
+                        type: type,
+                        body: entityBody,
+                        velocity: {x: 0, y: 0}
+                    };
+                };
+
+                const createPlayer = createEntity("player");
+                const createFood = createEntity("food");
+
+                const renderGameState = (entities, canvasMonad) => {
+                    canvasMonad.chain(canvas => {
+                        const canvasContext = canvas.getContext("2d");
+                        canvasContext.clearRect(0, 0, canvas.width, canvas.height);
+                        entities.map(entity => {
+                            canvasContext.fillStyle = entity.type === "player" ? 'green' : 'red';
+                            entity.body.map(segment => {
+                                canvasContext.fillRect(segment.value.position.x*CELL_SIDE, segment.value.position.y*CELL_SIDE, CELL_SIDE, CELL_SIDE);
+                                return segment;
+                            });
+                            return entity;
+                        });
+                        return CanvasMonad(canvas);
+                    });
+                    return entities;
+                };
+
+
+
+
+                const isOppositeDirection = (player, inputMaybe) => {
+                    let input = inputMaybe.get({key: "ArrowRight"});
+                    // let velocityX, velocityY;
+                    // [velocityY, velocityX] = allInputs[input.key];
+
+                    let velocityX = allInputs[input.key].x;
+                    let velocityY = allInputs[input.key].y;
+                    
+                    let firstSegment = player.body.head;
+                    let secondSegment = firstSegment.next;
+
+                    return (firstSegment.value.position.x + velocityX == secondSegment.value.position.x && firstSegment.value.position.y + velocityY == secondSegment.value.position.y);
+                }; 
+                // --- Wrap User Input Event Subscriptions in an InputMonad ---
+                InputMonad(document)
+                .subscribe("keydown", e => {
+
+                    if (allInputs[e.key]) {
+                        rawInput.key = e.key;
+                        console.log(rawInput);
+                        console.log(isOppositeDirection(entities[0], inputMaybe));
+                    }
+                });
+                
+
+                // --- Main Game Loop ---
+                // System composition order: input → gravity → physics → ground → obstacle → render.
+                // const gameUpdate = composeSystems([
+                //     state => inputSystem(state, inputMaybe),
+                //     gravitySystem,
+                //     physicsSystem,
+                //     groundSystem,
+                //     obstacleSystem,
+                //     state => renderSystem(state, canvasMonad)
+                // ]);
+
+
+                const inputSystem = (entities, inputMaybe) => 
+                    entities.map(entity => {
+                        if (entity.type == "player" && !isOppositeDirection(entity, inputMaybe)) {
+                            let input = inputMaybe.get({key: "ArrowRight"});
+                            // let velocityX, velocityY;
+                            // [velocityX, velocityY] = allInputs[input.key];
+
+                            let velocityX = allInputs[input.key].x;
+                            let velocityY = allInputs[input.key].y;
+                            
+                            console.log(input);
+                            console.log(velocityX, velocityY);
+                            console.log(entities);
+                            return {
+                                ...entity,
+                                velocity: {
+                                    ...entity.velocity,
+                                    x: velocityX,
+                                    y: velocityY,
+                                }
+                            };
+                        }
+                        return entity;
+                    });
+                const physics = entities => 
+                    entities.map(entity => {
+                        var newEntity = {
+                            ...entity,
+                            body: entity.body.copy()
+                        };
+                        if (newEntity.type == "player") {
+                            console.log("I am player");
+                            let prevHead = newEntity.body.head;
+                            newEntity.body.appendLeft({
+                                ...prevHead.value,
+                                position: {
+                                    x: prevHead.value.position.x + newEntity.velocity.x,
+                                    y: prevHead.value.position.y + newEntity.velocity.y,
+                                }
+                            });
+                            newEntity.body.popRight();
+                        }
+                        console.log(newEntity);
+                        return newEntity;
+                    });
+
+                const collisionDetection = (entities, field) => {
+                    entities.map(x => x);
+                    return entities;
+                };
+
+                // var x = new Array(...entities);
+                // var y = x;
+                // y = {car:"porche", engine:"stolen"};
+                // console.log(x);
+                // console.log(x.head);
+                // console.log(x.tail);
+                // console.log(x instanceof LinkedList);
+                // console.log(isFree);
+                // console.log([1, 2]);
+                // renderGameState(entities, canvasMonad);
+                // console.log(composeSystems(10));
+
+                
+                const isFree = Array(FIELD_SIDE).fill().map(() => Array(FIELD_SIDE).fill([true, null]));
+                var entities = [
+                    createPlayer(START_X, START_Y, START_LENGTH),
+                    createFood(7, 7, FOOD_LENGTH),
+                ];
+                
+                const allInputs = {
+                    ArrowUp: {
+                        x: 0,
+                        y: -1,
+                    },
+                    ArrowDown: {
+                        x: 0,
+                        y: 1,
+                    },
+                    ArrowRight: {
+                        x: 1,
+                        y: 0,
+                    },
+                    ArrowLeft: {
+                        x: -1,
+                        y: 0,
+                    },
+                };
+
+                let rawInput = {key: "ArrowRight"};
+
+                let inputMaybe = Maybe(rawInput);
+                const canvasEl = document.getElementById("gameCanvas");
+                let canvasMonad = CanvasMonad(canvasEl);
+                
+                const composeSystems = systems => 
+                    systems.reduceRight(
+                        (composedSystems, system) => state => system(composedSystems(state)),
+                        state => state
+                    );
+
+                const gameUpdate = composeSystems([
+                    state => inputSystem(state, inputMaybe),
+                    state => physics(state),
+                    state => collisionDetection(state, isFree),
+                    state => renderGameState(state, canvasMonad),
+                ]);
+
+                var count = 0;
+                function gameLoop() {
+                    count = (count + 1) % 5;
+                    if (count == 0) {
+                        entities = gameUpdate(entities);
+                    }
+                    requestAnimationFrame(gameLoop);
+                }
+                
+                gameLoop();
+                // entities = renderGameState(entities, canvasMonad);
+                // entities = renderGameState(entities, canvasMonad);
+
+            </script>
+        </body>
+    </html>

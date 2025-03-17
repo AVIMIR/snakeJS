@@ -1,9 +1,37 @@
 <!DOCTYPE html>
     <html>
-        <head></head>
-        <body align="center">
-            <canvas id="gameCanvas" width="800" height="800" style="border: 1px solid black"></canvas>
+        <head>
+            <style>
+                body {
+                    
+                }
+                div { 
+                    display: inline-block;
+                    text-align: center;
+                    vertical-align: text-top;
+                }
+                .sideDiv {
+                    height: 800px;
+                    width: 15%;
+                }
+                h1 {
+                    padding-left: 100px;
+                    padding-right: 100px;
+                    display: block;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="sideDiv">
+                <p id="snakeCoords">x</p>  
+                <h1 id="score">x</h1> 
+            </div>
+            <div class="sideDiv">
 
+            </div>
+            <div id="canvasDiv">
+                <canvas id="gameCanvas" width="800" height="800" style="border: 1px solid black"></canvas>
+            </div>
 
             <script>
                 class Node {
@@ -110,13 +138,27 @@
                     }
                 }
 
+
+                const FPS_DIVIDER = 6;
                 const START_X = 3;
                 const START_Y = 3;
                 const START_LENGTH = 3;
                 const FOOD_LENGTH = 2;
-
+                // 
                 const FIELD_SIDE = 40;
                 const CELL_SIDE =  20;
+
+
+
+                const isFree = Array(FIELD_SIDE).fill().map(() => Array(FIELD_SIDE).fill([true, null]));
+                const gameCanvas = document.getElementById("gameCanvas");
+                const createPosition = (x, y) => ({x: x, y: y,});
+                const ALL_INPUTS = {
+                    ArrowUp: createPosition(0, -1),
+                    ArrowDown: createPosition(0, 1),
+                    ArrowRight: createPosition(1, 0),
+                    ArrowLeft: createPosition(-1, 0),
+                };
 
 
                 const Maybe = value => ({
@@ -125,17 +167,14 @@
                     chain: f => (value != null ? f(value) : Maybe(null)),
                     get: def => (value != null ? value : def),
                 });
-
                 const InputMonad = target => ({
                     subscribe: (eventType, handler) => {
                         target.addEventListener(eventType, handler);
                         return InputMonad(target);
                     },
-
                     map: f => InputMonad(f(target)),
                     get: () => target,
                 });
-
                 const CanvasMonad = canvas => ({
                     isJust: canvas !== null && canvas !== undefined,
                     map: f => (canvas != null ? InputMonad(f(canvas)) : InputMonad(null)),
@@ -143,45 +182,156 @@
                     get: def => (canvas != null ? canvas : def),
                     getContext: def => (canvas != null ? canvas.getContext("2d") : def),
                 });
+                const FieldMonad = field => ({
+                    isJust: field !== null && field !== undefined,
+                    map: f => (field != null ? FieldMonad(f(field)) : FieldMonad(null)),
+                    chain: f => (field != null ? f(field) : FieldMonad(null)),
+                    get: def => (field != null ? field : def),
+                });
+
+                let rawInput = {key: "ArrowRight"};
+                let inputMaybe = Maybe(rawInput);
+                let canvasMonad = CanvasMonad(gameCanvas);
+                let fieldMonad = FieldMonad(isFree);
+
+                InputMonad(document)
+                .subscribe("keydown", e => {
+                    if (ALL_INPUTS[e.key]) {
+                        rawInput.key = e.key;
+                    }
+                });
 
 
-                
-                const isInBounds = coord => (coord >= 0 && coord <= FIELD_SIDE-1);
-                const createEntitySegment = (x, y) => {
-                    if (!isInBounds(x) || !isInBounds(y)) {
-                        throw "OUT OF BOUNDS";
-                        return null;
-                    }
-                    
-                    return { 
-                        position: {
-                            x: x,
-                            y: y,
-                        }
-                    };
-                };
-                
-                const createEntity = type => (x, y, length) => {
-                    var entityBody = new LinkedList();
-                    
-                    for (let i=0; i<length; i++) {
-                        if (!isFree[y][x-i][0]) {
-                            throw "THIS PLACE IS BUSY";
-                            return null;
-                        }
-                        isFree[y][x] = [false, type];
-                    
-                        entityBody.appendRight(createEntitySegment(x-i, y));
-                    }
+                const occupyCell = (type, field, position) => {
+                        field[position.y][position.x] = [false, type];
+                }
+                const freeCell = (field, position) => {
+                    field[position.y][position.x] = [true, null];
+                }
+                const createEntitySegment = (type, field, position) => {
+                    let loopedPosition = loopPosition(position);
+                    occupyCell(type, field, loopedPosition);
+
                     return {
-                        type: type,
-                        body: entityBody,
-                        velocity: {x: 0, y: 0}
+                        position: loopedPosition,
                     };
                 };
 
-                const createPlayer = createEntity("player");
-                const createFood = createEntity("food");
+                // const createEntityOnField = fieldMonad => type => (x, y, length) => {
+                //     var entityBody = new LinkedList();
+                //     for (let i=0; i<length; i++) {
+                //         entityBody.appendRight(createEntitySegment(type, fieldMonad, createPosition(x-i, y)));
+                //     }
+
+                //     return {
+                //         type: type,
+                //         body: entityBody,
+                //         velocity: createPosition(0, 1),
+                //     };
+                // };
+
+                const createEntityOnField = fieldMonad => type => (x, y, length) => {
+                    var entity;
+                    fieldMonad.chain(field => {
+                        var entityBody = new LinkedList();
+                        for (let i=0; i<length; i++) {
+                            entityBody.appendRight(createEntitySegment(type, field, createPosition(x-i, y)));
+                        }
+
+                        entity = {
+                            type: type,
+                            body: entityBody,
+                            velocity: createPosition(0, 1),
+                        };
+                        return FieldMonad(field);
+                    });
+                    return entity;
+                };
+                const getEntityHead = entity => entity.body.head;
+                const getSegmentPosition = segment => segment.value.position;
+                const equalPositions = (pos1, pos2) => (
+                    pos1.x == pos2.x && pos1.y == pos2.y
+                );
+                const isOppositeDirection = (player, inputMaybe) => {
+                    let input = inputMaybe.get({key: "ArrowRight"});
+                    let velocity = ALL_INPUTS[input.key];
+
+                    let head = getEntityHead(player);
+                    let next = head.next;
+
+                    let appliedVelocity = applyVelocity(getSegmentPosition(head), velocity);
+                    return (equalPositions(loopPosition(appliedVelocity), getSegmentPosition(next)));
+                    
+                }; 
+                // --- Wrap User Input Event Subscriptions in an InputMonad ---
+
+                const inputSystem = (entities, inputMaybe) => 
+                    entities.map(entity => {
+                        if (entity.type == "player" && !isOppositeDirection(entity, inputMaybe)) {
+                            let input = inputMaybe.get({key: "ArrowRight"});
+                            let velocity = ALL_INPUTS[input.key];
+                            return {
+                                ...entity,
+                                velocity: velocity,
+                            };
+                        }
+                        return entity;
+                    });
+                
+
+
+                const applyCoordVelocity = (position, velocity) => coord =>
+                    position[coord] + velocity[coord];
+
+                const applyVelocity = (position, velocity) => {
+                    const applyParticularVelocity = applyCoordVelocity(position, velocity);
+                    return createPosition(
+                        applyParticularVelocity('x'),
+                        applyParticularVelocity('y')
+                    )
+                };
+                                
+                const loopCoord = coord => 
+                    coord < 0 ? FIELD_SIDE-1 : coord % FIELD_SIDE; 
+                
+                const loopPosition = position => createPosition(
+                    loopCoord(position.x),
+                    loopCoord(position.y)
+                );
+
+                const physics = (entities, fieldMonad) => {
+                    var newEntities;
+                    fieldMonad.chain(field => {
+                        newEntities = entities.map(entity => {
+                            var newEntity = {
+                                ...entity,
+                                body: entity.body.copy()
+                            };
+                            let prevHead = getEntityHead(newEntity);
+
+                            newEntity.body.appendLeft(createEntitySegment(
+                                entity.type, 
+                                field,
+                                applyVelocity(
+                                    getSegmentPosition(prevHead),
+                                    newEntity.velocity,
+                                ),
+                            ));
+                            let oldTail = newEntity.body.popRight();
+                            freeCell(field, oldTail.position);
+                            return newEntity;
+                        });
+                        return FieldMonad(field);
+                    });
+                    return newEntities;
+                };
+
+                const collisionDetection = (entities, field) => 
+                    entities.map(entity => {
+                        
+
+                        return entity;
+                    });
 
                 const renderGameState = (entities, canvasMonad) => {
                     canvasMonad.chain(canvas => {
@@ -189,6 +339,12 @@
                         canvasContext.clearRect(0, 0, canvas.width, canvas.height);
                         entities.map(entity => {
                             canvasContext.fillStyle = entity.type === "player" ? 'green' : 'red';
+                            if (entity.type == "player") {
+                                let coordsField = document.getElementById("snakeCoords");
+                                coordsField.innerHTML = `(${entity.body.head.value.position.x}, ${entity.body.head.value.position.y})`;
+                                let scoreField = document.getElementById("score");
+                                scoreField.innerHTML = `${entity.body.length-3}`;
+                            }
                             entity.body.map(segment => {
                                 canvasContext.fillRect(segment.value.position.x*CELL_SIDE, segment.value.position.y*CELL_SIDE, CELL_SIDE, CELL_SIDE);
                                 return segment;
@@ -201,139 +357,6 @@
                 };
 
 
-
-
-                const isOppositeDirection = (player, inputMaybe) => {
-                    let input = inputMaybe.get({key: "ArrowRight"});
-                    // let velocityX, velocityY;
-                    // [velocityY, velocityX] = allInputs[input.key];
-
-                    let velocityX = allInputs[input.key].x;
-                    let velocityY = allInputs[input.key].y;
-                    
-                    let firstSegment = player.body.head;
-                    let secondSegment = firstSegment.next;
-
-                    return (firstSegment.value.position.x + velocityX == secondSegment.value.position.x && firstSegment.value.position.y + velocityY == secondSegment.value.position.y);
-                }; 
-                // --- Wrap User Input Event Subscriptions in an InputMonad ---
-                InputMonad(document)
-                .subscribe("keydown", e => {
-
-                    if (allInputs[e.key]) {
-                        rawInput.key = e.key;
-                        console.log(rawInput);
-                        console.log(isOppositeDirection(entities[0], inputMaybe));
-                    }
-                });
-                
-
-                // --- Main Game Loop ---
-                // System composition order: input → gravity → physics → ground → obstacle → render.
-                // const gameUpdate = composeSystems([
-                //     state => inputSystem(state, inputMaybe),
-                //     gravitySystem,
-                //     physicsSystem,
-                //     groundSystem,
-                //     obstacleSystem,
-                //     state => renderSystem(state, canvasMonad)
-                // ]);
-
-
-                const inputSystem = (entities, inputMaybe) => 
-                    entities.map(entity => {
-                        if (entity.type == "player" && !isOppositeDirection(entity, inputMaybe)) {
-                            let input = inputMaybe.get({key: "ArrowRight"});
-                            // let velocityX, velocityY;
-                            // [velocityX, velocityY] = allInputs[input.key];
-
-                            let velocityX = allInputs[input.key].x;
-                            let velocityY = allInputs[input.key].y;
-                            
-                            console.log(input);
-                            console.log(velocityX, velocityY);
-                            console.log(entities);
-                            return {
-                                ...entity,
-                                velocity: {
-                                    ...entity.velocity,
-                                    x: velocityX,
-                                    y: velocityY,
-                                }
-                            };
-                        }
-                        return entity;
-                    });
-                const physics = entities => 
-                    entities.map(entity => {
-                        var newEntity = {
-                            ...entity,
-                            body: entity.body.copy()
-                        };
-                        if (newEntity.type == "player") {
-                            console.log("I am player");
-                            let prevHead = newEntity.body.head;
-                            newEntity.body.appendLeft({
-                                ...prevHead.value,
-                                position: {
-                                    x: prevHead.value.position.x + newEntity.velocity.x,
-                                    y: prevHead.value.position.y + newEntity.velocity.y,
-                                }
-                            });
-                            newEntity.body.popRight();
-                        }
-                        console.log(newEntity);
-                        return newEntity;
-                    });
-
-                const collisionDetection = (entities, field) => {
-                    entities.map(x => x);
-                    return entities;
-                };
-
-                // var x = new Array(...entities);
-                // var y = x;
-                // y = {car:"porche", engine:"stolen"};
-                // console.log(x);
-                // console.log(x.head);
-                // console.log(x.tail);
-                // console.log(x instanceof LinkedList);
-                // console.log(isFree);
-                // console.log([1, 2]);
-                // renderGameState(entities, canvasMonad);
-                // console.log(composeSystems(10));
-
-                
-                const isFree = Array(FIELD_SIDE).fill().map(() => Array(FIELD_SIDE).fill([true, null]));
-                var entities = [
-                    createPlayer(START_X, START_Y, START_LENGTH),
-                    createFood(7, 7, FOOD_LENGTH),
-                ];
-                
-                const allInputs = {
-                    ArrowUp: {
-                        x: 0,
-                        y: -1,
-                    },
-                    ArrowDown: {
-                        x: 0,
-                        y: 1,
-                    },
-                    ArrowRight: {
-                        x: 1,
-                        y: 0,
-                    },
-                    ArrowLeft: {
-                        x: -1,
-                        y: 0,
-                    },
-                };
-
-                let rawInput = {key: "ArrowRight"};
-
-                let inputMaybe = Maybe(rawInput);
-                const canvasEl = document.getElementById("gameCanvas");
-                let canvasMonad = CanvasMonad(canvasEl);
                 
                 const composeSystems = systems => 
                     systems.reduceRight(
@@ -343,24 +366,36 @@
 
                 const gameUpdate = composeSystems([
                     state => inputSystem(state, inputMaybe),
-                    state => physics(state),
-                    state => collisionDetection(state, isFree),
+                    state => physics(state, fieldMonad),
+                    state => collisionDetection(state, fieldMonad),
                     state => renderGameState(state, canvasMonad),
                 ]);
 
+                const createEntity = createEntityOnField(fieldMonad);
+                const createPlayer = createEntity("player");
+                const createFood = createEntity("food");
+
+                var entities = [
+                    createPlayer(START_X, START_Y, START_LENGTH),
+                    createFood(7, 7, FOOD_LENGTH),
+                ];
+
+
                 var count = 0;
+                var count1 = 0;
                 function gameLoop() {
-                    count = (count + 1) % 5;
+                    count = (count + 1) % FPS_DIVIDER;
                     if (count == 0) {
                         entities = gameUpdate(entities);
+                    }
+                    if (count1 < 20) {
+                        count1++;
+                        console.log(isFree);
                     }
                     requestAnimationFrame(gameLoop);
                 }
                 
                 gameLoop();
-                // entities = renderGameState(entities, canvasMonad);
-                // entities = renderGameState(entities, canvasMonad);
-
             </script>
         </body>
     </html>

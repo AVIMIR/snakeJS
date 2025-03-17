@@ -70,7 +70,9 @@
                         // if (object instanceof LinkedList) {
                         //     throw "CANNOT CONCATENATE LISTS";
                         // }
-
+                        if (object == null) {
+                            return ;
+                        }
                         var value;
                         if (object instanceof Node) {
                             value = object.value;
@@ -91,7 +93,9 @@
                         // if (object instanceof LinkedList) {
                         //     throw "CANNOT CONCATENATE LISTS";
                         // }
-
+                        if (object == null) {
+                            return ;
+                        }
                         var value;
                         if (object instanceof Node) {
                             value = object.value;
@@ -139,18 +143,21 @@
                 }
 
 
-                const FPS_DIVIDER = 6;
+                const FPS_DIVIDER = 5;
                 const START_X = 3;
                 const START_Y = 3;
-                const START_LENGTH = 3;
-                const FOOD_LENGTH = 2;
+                const START_LENGTH = 2;
+                
+                const FOOD_AMOUNT = 1;
+                const FOOD_LENGTH = 5;
                 // 
                 const FIELD_SIDE = 40;
                 const CELL_SIDE =  20;
 
 
 
-                const isFree = Array(FIELD_SIDE).fill().map(() => Array(FIELD_SIDE).fill([true, null]));
+
+                const isFree = Array(FIELD_SIDE).fill().map(() => Array(FIELD_SIDE).fill(null));
                 const gameCanvas = document.getElementById("gameCanvas");
                 const createPosition = (x, y) => ({x: x, y: y,});
                 const ALL_INPUTS = {
@@ -189,6 +196,13 @@
                     get: def => (field != null ? field : def),
                 });
 
+                const SetMonad = set => ({
+                    isJust: set !== null && set !== undefined,
+                    map: f => (set != null ? FieldMonad(f(set)) : FieldMonad(null)),
+                    chain: f => (set != null ? f(set) : FieldMonad(null)),
+                    get: def => (set != null ? set : def),
+                });
+
                 let rawInput = {key: "ArrowRight"};
                 let inputMaybe = Maybe(rawInput);
                 let canvasMonad = CanvasMonad(gameCanvas);
@@ -199,52 +213,52 @@
                     if (ALL_INPUTS[e.key]) {
                         rawInput.key = e.key;
                     }
+                    if (e.key == ' ') {
+                        rawInput.key = e.key;
+                        throw "EJECTING"; 
+                    }
                 });
 
-
-                const occupyCell = (type, field, position) => {
-                        field[position.y][position.x] = [false, type];
+                const getCellStatus = (field, position) =>
+                    field[position.y][position.x];
+                const occupyCell = (entity, field, position) => {
+                    field[position.y][position.x] = entity;
                 }
                 const freeCell = (field, position) => {
-                    field[position.y][position.x] = [true, null];
+                    field[position.y][position.x] = null;
                 }
-                const createEntitySegment = (type, field, position) => {
+                const createEntitySegment = (entity, field, position) => {
                     let loopedPosition = loopPosition(position);
-                    occupyCell(type, field, loopedPosition);
+                    occupyCell(entity, field, loopedPosition);
 
                     return {
                         position: loopedPosition,
                     };
                 };
 
-                // const createEntityOnField = fieldMonad => type => (x, y, length) => {
-                //     var entityBody = new LinkedList();
-                //     for (let i=0; i<length; i++) {
-                //         entityBody.appendRight(createEntitySegment(type, fieldMonad, createPosition(x-i, y)));
-                //     }
+                function* getNextId () {
+                    let id = 0;
+                    while (true) {
+                        yield id;
+                        id++;
+                    }
+                }
+                var nextIdGetter = getNextId();
+                const createEntity = type => (field, headPosition, length) => {
+                    let id = nextIdGetter.next().value;
+                    var entity = {
+                        type: type,
+                        body: new LinkedList(),
+                        velocity: createPosition(1, 0),
+                        hasEaten: 0,
+                        ID: id,
+                    };
 
-                //     return {
-                //         type: type,
-                //         body: entityBody,
-                //         velocity: createPosition(0, 1),
-                //     };
-                // };
+                    for (let i=0; i<length; i++) {
+                        let segmentPosition = {...headPosition, x: headPosition.x-i};
+                        entity.body.appendRight(createEntitySegment(entity, field, segmentPosition));
+                    }
 
-                const createEntityOnField = fieldMonad => type => (x, y, length) => {
-                    var entity;
-                    fieldMonad.chain(field => {
-                        var entityBody = new LinkedList();
-                        for (let i=0; i<length; i++) {
-                            entityBody.appendRight(createEntitySegment(type, field, createPosition(x-i, y)));
-                        }
-
-                        entity = {
-                            type: type,
-                            body: entityBody,
-                            velocity: createPosition(0, 1),
-                        };
-                        return FieldMonad(field);
-                    });
                     return entity;
                 };
                 const getEntityHead = entity => entity.body.head;
@@ -266,7 +280,8 @@
                 // --- Wrap User Input Event Subscriptions in an InputMonad ---
 
                 const inputSystem = (entities, inputMaybe) => 
-                    entities.map(entity => {
+                    entities.map(entityNode => {
+                        let entity = entityNode.value;
                         if (entity.type == "player" && !isOppositeDirection(entity, inputMaybe)) {
                             let input = inputMaybe.get({key: "ArrowRight"});
                             let velocity = ALL_INPUTS[input.key];
@@ -275,7 +290,7 @@
                                 velocity: velocity,
                             };
                         }
-                        return entity;
+                        return new Node(entity, entityNode.prev, entityNode.next);
                     });
                 
 
@@ -292,64 +307,132 @@
                 };
                                 
                 const loopCoord = coord => 
-                    coord < 0 ? FIELD_SIDE-1 : coord % FIELD_SIDE; 
+                    coord < 0 ? FIELD_SIDE+coord : coord % FIELD_SIDE; 
                 
                 const loopPosition = position => createPosition(
                     loopCoord(position.x),
                     loopCoord(position.y)
                 );
 
-                const physics = (entities, fieldMonad) => {
+                var entitiesToDelete = new Set();
+                const physics = (entities, fieldMonad, SetMonad) => {
                     var newEntities;
                     fieldMonad.chain(field => {
-                        newEntities = entities.map(entity => {
-                            var newEntity = {
-                                ...entity,
-                                body: entity.body.copy()
-                            };
+                        newEntities = entities.map(entityNode => {
+                            let entity = entityNode.value;
+                            //console.log(entity);
+                            if (entitiesToDelete.has(entity.ID)) {
+                                entitiesToDelete.delete(entity.ID)
+                                console.log("DELETE ID");
+                                entity.body.map(segment => freeCell(field, getSegmentPosition(segment)));
+                                return ;
+                            }
+                            var newEntity = {...entity, body: entity.body.copy()};
                             let prevHead = getEntityHead(newEntity);
-
-                            newEntity.body.appendLeft(createEntitySegment(
-                                entity.type, 
-                                field,
-                                applyVelocity(
-                                    getSegmentPosition(prevHead),
-                                    newEntity.velocity,
-                                ),
+                            let newPosition = loopPosition(applyVelocity(
+                                getSegmentPosition(prevHead),
+                                newEntity.velocity,
                             ));
-                            let oldTail = newEntity.body.popRight();
-                            freeCell(field, oldTail.position);
-                            return newEntity;
+
+                            let occupyEntity = getCellStatus(field, newPosition);
+                            // console.log(cellStatus);
+                            if (occupyEntity != null && newEntity.type == 'player' && occupyEntity.type == 'food') {
+                                newEntity.hasEaten += FOOD_LENGTH;
+                                entitiesToDelete.add(occupyEntity.ID);
+                            }
+                            if (occupyEntity != null && newEntity.type == 'food' && occupyEntity.type == 'player') {
+                                let playerHead = getEntityHead(occupyEntity);
+                                let playerHeadPosition = getSegmentPosition(playerHead);
+                                // console.log(playerHeadPosition);
+                                // console.log(newPosition);
+                                // console.log(isFree);
+                                if (equalPositions(playerHeadPosition, newPosition)) {
+                                    occupyEntity.hasEaten += FOOD_LENGTH;
+                                }
+                                entitiesToDelete.add(newEntity.ID);
+                                // console.log("I was here");
+                            }
+                            if (occupyEntity != null && newEntity.type == 'player' && occupyEntity.type == 'player') {
+                                alert("GAME OVER");
+                                throw "UROBOROS";
+                            }
+
+                            newEntity.body.appendLeft(createEntitySegment(entity, field, newPosition,));
+                            if (newEntity.type == 'player' && newEntity.hasEaten > 0) {
+                                newEntity.hasEaten -= 1;   
+                            } else {
+                                let oldTail = newEntity.body.popRight();
+                                freeCell(field, oldTail.position);
+                            }
+
+                            newEntity.body = newEntity.body.map(segment => {
+                                occupyCell(newEntity, field, getSegmentPosition(segment));
+                                return segment;
+                            });
+                            return new Node(newEntity, entityNode.prev, entityNode.next);
                         });
                         return FieldMonad(field);
                     });
                     return newEntities;
                 };
 
-                const collisionDetection = (entities, field) => 
+                const collisionDetection = (entity, field) => 
                     entities.map(entity => {
                         
 
                         return entity;
                     });
+                
+                const createNewFood = (entities, fieldMonad) => {
+                    // console.log(entities);
+                    var newEntities = entities.copy();
+                    fieldMonad.chain(field => {
+                        if (newEntities.length-1 < FOOD_AMOUNT) {
+                            
+                            newEntities.appendLeft(createRandomFood(field));
+                        }
 
+                        return FieldMonad(field);
+                    });
+                    return newEntities;
+                };
+
+                const SHADE = 100;
+                const properColorComponent = component => Math.max(component, 0);
+                const darkenColor = (rgb) =>
+                    rgb.map(component => properColorComponent(component-SHADE));
+                const brightenColor = rgb =>
+                    rgb.map(component => properColorComponent(component+SHADE));
+                const SNAKE_COLOR = [SHADE, 150, SHADE]
+                const FOOD_COLOR = [250, SHADE, SHADE]
+                const colorToString = rgb => `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`
+                const shadeColor = (segmentId, color) => {
+                    if (segmentId == 0) {
+                        return darkenColor(color);
+                    }
+                    return color
+                };
                 const renderGameState = (entities, canvasMonad) => {
                     canvasMonad.chain(canvas => {
                         const canvasContext = canvas.getContext("2d");
                         canvasContext.clearRect(0, 0, canvas.width, canvas.height);
-                        entities.map(entity => {
-                            canvasContext.fillStyle = entity.type === "player" ? 'green' : 'red';
+                        entities.map(entityNode => {
+                            let entity = entityNode.value;
+                            let baseColor = entity.type === "player" ? SNAKE_COLOR : FOOD_COLOR;
                             if (entity.type == "player") {
                                 let coordsField = document.getElementById("snakeCoords");
                                 coordsField.innerHTML = `(${entity.body.head.value.position.x}, ${entity.body.head.value.position.y})`;
                                 let scoreField = document.getElementById("score");
-                                scoreField.innerHTML = `${entity.body.length-3}`;
+                                scoreField.innerHTML = `${entity.body.length-START_LENGTH}`;
                             }
+                            var segmentId = 0;
                             entity.body.map(segment => {
+                                canvasContext.fillStyle = colorToString(shadeColor(segmentId, baseColor));
                                 canvasContext.fillRect(segment.value.position.x*CELL_SIDE, segment.value.position.y*CELL_SIDE, CELL_SIDE, CELL_SIDE);
+                                segmentId++;
                                 return segment;
                             });
-                            return entity;
+                            return entityNode;
                         });
                         return CanvasMonad(canvas);
                     });
@@ -367,19 +450,33 @@
                 const gameUpdate = composeSystems([
                     state => inputSystem(state, inputMaybe),
                     state => physics(state, fieldMonad),
+                    state => createNewFood(state, fieldMonad),
                     state => collisionDetection(state, fieldMonad),
                     state => renderGameState(state, canvasMonad),
                 ]);
 
-                const createEntity = createEntityOnField(fieldMonad);
                 const createPlayer = createEntity("player");
                 const createFood = createEntity("food");
+                const randInt = (min, max) => Math.floor(Math.random() * (max - min) ) + min;
 
-                var entities = [
-                    createPlayer(START_X, START_Y, START_LENGTH),
-                    createFood(7, 7, FOOD_LENGTH),
-                ];
+                const createRandomFood = field => {
+                    do {
+                        var foodPosition = createPosition(
+                            randInt(0, FIELD_SIDE-1),
+                            randInt(0, FIELD_SIDE-1),
+                        );
 
+                        var loopedPosition = loopPosition(foodPosition);
+                        var cell = getCellStatus(field, loopedPosition);
+                    } while (cell != null);
+
+                    return createFood(field, loopedPosition, FOOD_LENGTH);
+                };
+
+                var entities = new LinkedList(
+                    createFood(fieldMonad.get("?"), createPosition(7, 7), FOOD_LENGTH),
+                    createPlayer(fieldMonad.get("?"), createPosition(START_X, START_Y), START_LENGTH),
+                );
 
                 var count = 0;
                 var count1 = 0;
@@ -387,10 +484,6 @@
                     count = (count + 1) % FPS_DIVIDER;
                     if (count == 0) {
                         entities = gameUpdate(entities);
-                    }
-                    if (count1 < 20) {
-                        count1++;
-                        console.log(isFree);
                     }
                     requestAnimationFrame(gameLoop);
                 }

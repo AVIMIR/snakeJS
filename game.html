@@ -148,9 +148,11 @@
                 const START_Y = 3;
                 const START_LENGTH = 3;
                 
-                const FOOD_AMOUNT = 1;
-                const FOOD_LENGTH = 40;
-                const WILL_TO_CHANGE = 100;
+                const FOOD_AMOUNT = 2;
+                const FOOD_LENGTH = 7;
+                const FOOD_LENGTH_MAX = 5;
+                const FOOD_LENGTH_MIN = 3;
+                const WILL_TO_CHANGE = 20;
                 // 
                 const FIELD_SIDE = 40;
                 const CELL_SIDE =  20;
@@ -168,6 +170,12 @@
                     ArrowRight: createPosition(1, 0),
                     ArrowLeft: createPosition(-1, 0),
                 };
+                var availableDirs = [
+                    ALL_INPUTS["ArrowLeft"],
+                    ALL_INPUTS["ArrowUp"],
+                    ALL_INPUTS["ArrowRight"],
+                    ALL_INPUTS["ArrowDown"],
+                ];
 
 
                 const Maybe = value => ({
@@ -248,28 +256,14 @@
                         id++;
                     }
                 }
+                var nextIdGetter = getNextId();
 
-                const getAvailableCells = (field, position) => {
-                    let neighbours = [
-                        isCellFree(field, applyVelocity(position, ALL_INPUTS["ArrowLeft"])),
-                        isCellFree(field, applyVelocity(position, ALL_INPUTS["ArrowUp"])),
-                        isCellFree(field, applyVelocity(position, ALL_INPUTS["ArrowRight"])),
-                        isCellFree(field, applyVelocity(position, ALL_INPUTS["ArrowDown"])),
-                    ];
-
-                    let availableDirs = [
-                        neighbours[0] ? ALL_INPUTS["ArrowLeft"] : null,
-                        neighbours[1] ? ALL_INPUTS["ArrowUp"] : null,
-                        neighbours[2] ? ALL_INPUTS["ArrowRight"] : null,
-                        neighbours[3] ? ALL_INPUTS["ArrowDown"] : null,
-                    ];
-
-                    return availableDirs.filter(direction => direction != null);
+                const pickAvailable = availableDirsL => {
+                    var r = randInt(0, availableDirsL.length);
+                    console.log(r);
+                    return availableDirsL[r];
                 };
 
-
-                const pickAvailable = availableDirs => availableDirs[randInt(0, 2)];
-                var nextIdGetter = getNextId();
                 const createEntity = type => (field, headPosition, length) => {
                     let id = nextIdGetter.next().value;
                     var entity = {
@@ -280,14 +274,6 @@
                         ID: id,
                     };
 
-                    if (entity.type == "food") {
-                        var availableDirs = [
-                            ALL_INPUTS["ArrowLeft"],
-                            ALL_INPUTS["ArrowUp"],
-                            ALL_INPUTS["ArrowRight"],
-                            ALL_INPUTS["ArrowDown"],
-                        ];
-                    }
                     var newPosition = headPosition;
                     for (let i=0; i<length; i++) {
                         if (i == 0 && entity.type == "food") {
@@ -295,11 +281,12 @@
                         }
                         
                         if (entity.type == "food") {
-                            availableDirs = availableDirs.filter(direction => !isOppositeDirection(entity, direction));
-                            if (availableDirs.length == 0) {
+                            var availableDirsSegment = availableDirs.filter(direction => !isOppositeDirection(entity.body.tail, direction) && 
+                                getCellStatus(field, loopPosition(applyVelocity(newPosition, direction))) == null);
+                            if (availableDirsSegment.length == 0) {
                                 break;
                             }
-                            newPosition = applyVelocity(newPosition, availableDirs[randInt(0, availableDirs.length-1)]);
+                            newPosition = applyVelocity(newPosition, availableDirsSegment[randInt(0, availableDirsSegment.length-1)]);
                             entity.body.appendRight(createEntitySegment(entity, field, newPosition));
                         }
                         if (entity.type == "player") {
@@ -310,7 +297,7 @@
                     }
 
                     if (entity.type == "food") {
-                        entity.velocity = pickAvailable(availableDirs);
+                        entity.velocity = pickAvailable(availableDirs.filter(direction => !isOppositeDirection(getEntityHead(entity), direction)));
                         entity.changeWill = 0;
                     }   
                     return entity;
@@ -320,14 +307,18 @@
                 const equalPositions = (pos1, pos2) => (
                     pos1.x == pos2.x && pos1.y == pos2.y
                 );
-                const isOppositeDirection = (player, velocity) => {
-                    if (player.body.length < 2) {
+
+
+
+                const isOppositeDirection = (entitySegment, velocity) => {
+                    if (entitySegment.next == null) {
                         return false;
                     }
-                    let head = getEntityHead(player);
-                    let next = head.next;
+                    // let head = getEntityHead(player);
 
-                    let appliedVelocity = applyVelocity(getSegmentPosition(head), velocity);
+                    let next = entitySegment.next;
+
+                    let appliedVelocity = applyVelocity(getSegmentPosition(entitySegment), velocity);
                     // console.log(equalPositions(loopPosition(appliedVelocity), getSegmentPosition(next)))
                     return (equalPositions(loopPosition(appliedVelocity), getSegmentPosition(next)));
                     
@@ -347,7 +338,7 @@
                     inputMaybe.chain(input => {
                         newEntities = entities.map(entityNode => {
                             let entity = entityNode.value;
-                            if (entity.type == "player" && !isOppositeDirection(entity, ALL_INPUTS[input.key])) {
+                            if (entity.type == "player" && !isOppositeDirection(getEntityHead(entity), ALL_INPUTS[input.key])) {
                                 let velocity = ALL_INPUTS[input.key];
                                 return {
                                     ...entity,
@@ -424,6 +415,9 @@
                                     // alert("GAME OVER");
                                     throw "UROBOROS";
                                 }
+                                if (occupyEntity != null && newEntity.type == 'food' && occupyEntity.type == 'food') {
+                                    entitiesToDelete.add(occupyEntity.ID);
+                                }
 
                                 newEntity.body.appendLeft(createEntitySegment(entity, field, newPosition,));
                                 if (newEntity.type == 'player' && newEntity.hasEaten > 0) {
@@ -431,6 +425,16 @@
                                 } else {
                                     let oldTail = newEntity.body.popRight();
                                     freeCell(field, oldTail.position);
+                                }
+                                if (newEntity.type == "food") {
+                                    newEntity.changeWill++;
+                                    if (newEntity.changeWill >= WILL_TO_CHANGE) {
+                                        let newWays = availableDirs.filter(direction => !isOppositeDirection(getEntityHead(newEntity), direction));
+                                        console.log(availableDirs);
+                                        console.log(newWays);
+                                        newEntity.velocity = pickAvailable(newWays);
+                                        newEntity.changeWill = 0;
+                                    }
                                 }
 
                                 newEntity.body = newEntity.body.map(segment => {
@@ -533,11 +537,10 @@
                         var cell = getCellStatus(field, loopedPosition);
                     } while (cell != null);
 
-                    return createFood(field, loopedPosition, FOOD_LENGTH);
+                    return createFood(field, loopedPosition, randInt(FOOD_LENGTH_MIN, FOOD_LENGTH_MAX));
                 };
 
                 var entities = new LinkedList(
-                    createFood(fieldMonad.get("?"), createPosition(7, 7), FOOD_LENGTH),
                     createPlayer(fieldMonad.get("?"), createPosition(START_X, START_Y), START_LENGTH),
                 );
 

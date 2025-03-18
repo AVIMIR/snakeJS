@@ -146,13 +146,15 @@
                 const FPS_DIVIDER = 5;
                 const START_X = 3;
                 const START_Y = 3;
-                const START_LENGTH = 2;
+                const START_LENGTH = 3;
                 
                 const FOOD_AMOUNT = 1;
-                const FOOD_LENGTH = 5;
+                const FOOD_LENGTH = 40;
+                const WILL_TO_CHANGE = 100;
                 // 
                 const FIELD_SIDE = 40;
                 const CELL_SIDE =  20;
+                
 
 
 
@@ -196,10 +198,10 @@
                     get: def => (field != null ? field : def),
                 });
 
-                const SetMonad = set => ({
+                const EntitiesToDeleteMonad = set => ({
                     isJust: set !== null && set !== undefined,
-                    map: f => (set != null ? FieldMonad(f(set)) : FieldMonad(null)),
-                    chain: f => (set != null ? f(set) : FieldMonad(null)),
+                    map: f => (set != null ? EntitiesToDeleteMonad(f(set)) : EntitiesToDeleteMonad(null)),
+                    chain: f => (set != null ? f(set) : EntitiesToDeleteMonad(null)),
                     get: def => (set != null ? set : def),
                 });
 
@@ -207,6 +209,7 @@
                 let inputMaybe = Maybe(rawInput);
                 let canvasMonad = CanvasMonad(gameCanvas);
                 let fieldMonad = FieldMonad(isFree);
+                let entitiesToDeleteMonad = EntitiesToDeleteMonad(new Set());
 
                 InputMonad(document)
                 .subscribe("keydown", e => {
@@ -219,18 +222,20 @@
                     }
                 });
 
-                const getCellStatus = (field, position) =>
-                    field[position.y][position.x];
+                const getCellStatus = (field, position) => field[position.y][position.x];
+
+                const isCellFree = (field, position) => getCellStatus(field, position) == null;
+
                 const occupyCell = (entity, field, position) => {
                     field[position.y][position.x] = entity;
                 }
                 const freeCell = (field, position) => {
                     field[position.y][position.x] = null;
                 }
+
                 const createEntitySegment = (entity, field, position) => {
                     let loopedPosition = loopPosition(position);
                     occupyCell(entity, field, loopedPosition);
-
                     return {
                         position: loopedPosition,
                     };
@@ -243,6 +248,27 @@
                         id++;
                     }
                 }
+
+                const getAvailableCells = (field, position) => {
+                    let neighbours = [
+                        isCellFree(field, applyVelocity(position, ALL_INPUTS["ArrowLeft"])),
+                        isCellFree(field, applyVelocity(position, ALL_INPUTS["ArrowUp"])),
+                        isCellFree(field, applyVelocity(position, ALL_INPUTS["ArrowRight"])),
+                        isCellFree(field, applyVelocity(position, ALL_INPUTS["ArrowDown"])),
+                    ];
+
+                    let availableDirs = [
+                        neighbours[0] ? ALL_INPUTS["ArrowLeft"] : null,
+                        neighbours[1] ? ALL_INPUTS["ArrowUp"] : null,
+                        neighbours[2] ? ALL_INPUTS["ArrowRight"] : null,
+                        neighbours[3] ? ALL_INPUTS["ArrowDown"] : null,
+                    ];
+
+                    return availableDirs.filter(direction => direction != null);
+                };
+
+
+                const pickAvailable = availableDirs => availableDirs[randInt(0, 2)];
                 var nextIdGetter = getNextId();
                 const createEntity = type => (field, headPosition, length) => {
                     let id = nextIdGetter.next().value;
@@ -254,11 +280,39 @@
                         ID: id,
                     };
 
+                    if (entity.type == "food") {
+                        var availableDirs = [
+                            ALL_INPUTS["ArrowLeft"],
+                            ALL_INPUTS["ArrowUp"],
+                            ALL_INPUTS["ArrowRight"],
+                            ALL_INPUTS["ArrowDown"],
+                        ];
+                    }
+                    var newPosition = headPosition;
                     for (let i=0; i<length; i++) {
-                        let segmentPosition = {...headPosition, x: headPosition.x-i};
-                        entity.body.appendRight(createEntitySegment(entity, field, segmentPosition));
+                        if (i == 0 && entity.type == "food") {
+                            entity.body.appendRight(createEntitySegment(entity, field, newPosition));
+                        }
+                        
+                        if (entity.type == "food") {
+                            availableDirs = availableDirs.filter(direction => !isOppositeDirection(entity, direction));
+                            if (availableDirs.length == 0) {
+                                break;
+                            }
+                            newPosition = applyVelocity(newPosition, availableDirs[randInt(0, availableDirs.length-1)]);
+                            entity.body.appendRight(createEntitySegment(entity, field, newPosition));
+                        }
+                        if (entity.type == "player") {
+                            let segmentPosition = {...headPosition, x: headPosition.x-i};
+                            entity.body.appendRight(createEntitySegment(entity, field, segmentPosition));
+                        }
+                        
                     }
 
+                    if (entity.type == "food") {
+                        entity.velocity = pickAvailable(availableDirs);
+                        entity.changeWill = 0;
+                    }   
                     return entity;
                 };
                 const getEntityHead = entity => entity.body.head;
@@ -266,33 +320,46 @@
                 const equalPositions = (pos1, pos2) => (
                     pos1.x == pos2.x && pos1.y == pos2.y
                 );
-                const isOppositeDirection = (player, inputMaybe) => {
-                    let input = inputMaybe.get({key: "ArrowRight"});
-                    let velocity = ALL_INPUTS[input.key];
-
+                const isOppositeDirection = (player, velocity) => {
+                    if (player.body.length < 2) {
+                        return false;
+                    }
                     let head = getEntityHead(player);
                     let next = head.next;
 
                     let appliedVelocity = applyVelocity(getSegmentPosition(head), velocity);
+                    // console.log(equalPositions(loopPosition(appliedVelocity), getSegmentPosition(next)))
                     return (equalPositions(loopPosition(appliedVelocity), getSegmentPosition(next)));
                     
                 }; 
                 // --- Wrap User Input Event Subscriptions in an InputMonad ---
 
-                const inputSystem = (entities, inputMaybe) => 
-                    entities.map(entityNode => {
-                        let entity = entityNode.value;
-                        if (entity.type == "player" && !isOppositeDirection(entity, inputMaybe)) {
-                            let input = inputMaybe.get({key: "ArrowRight"});
-                            let velocity = ALL_INPUTS[input.key];
-                            return {
-                                ...entity,
-                                velocity: velocity,
-                            };
-                        }
-                        return new Node(entity, entityNode.prev, entityNode.next);
+                // const inputSystem = (entities, inputMaybe) => 
+                //     entities.map(entityNode => {
+                //         inputMaybe.chain{
+                //             let entity = entityNode.value;
+ 
+                //     }
+                //         return new Node(entity, entityNode.prev, entityNode.next);
+                //     });
+                const inputSystem = (entities, inputMaybe) => {
+                    var newEntities = entities.copy();
+                    inputMaybe.chain(input => {
+                        newEntities = entities.map(entityNode => {
+                            let entity = entityNode.value;
+                            if (entity.type == "player" && !isOppositeDirection(entity, ALL_INPUTS[input.key])) {
+                                let velocity = ALL_INPUTS[input.key];
+                                return {
+                                    ...entity,
+                                    velocity: velocity,
+                                };
+                            }
+                            return new Node(entity, entityNode.prev, entityNode.next);
+                        });
+                        return InputMonad(input);
                     });
-                
+                    return newEntities;
+                };
 
 
                 const applyCoordVelocity = (position, velocity) => coord =>
@@ -314,75 +381,71 @@
                     loopCoord(position.y)
                 );
 
-                var entitiesToDelete = new Set();
-                const physics = (entities, fieldMonad, SetMonad) => {
+                
+                const physicsAndLogic = (entities, fieldMonad, entitiesToDeleteMonad) => {
                     var newEntities;
                     fieldMonad.chain(field => {
-                        newEntities = entities.map(entityNode => {
-                            let entity = entityNode.value;
-                            //console.log(entity);
-                            if (entitiesToDelete.has(entity.ID)) {
-                                entitiesToDelete.delete(entity.ID)
-                                console.log("DELETE ID");
-                                entity.body.map(segment => freeCell(field, getSegmentPosition(segment)));
-                                return ;
-                            }
-                            var newEntity = {...entity, body: entity.body.copy()};
-                            let prevHead = getEntityHead(newEntity);
-                            let newPosition = loopPosition(applyVelocity(
-                                getSegmentPosition(prevHead),
-                                newEntity.velocity,
-                            ));
-
-                            let occupyEntity = getCellStatus(field, newPosition);
-                            // console.log(cellStatus);
-                            if (occupyEntity != null && newEntity.type == 'player' && occupyEntity.type == 'food') {
-                                newEntity.hasEaten += FOOD_LENGTH;
-                                entitiesToDelete.add(occupyEntity.ID);
-                            }
-                            if (occupyEntity != null && newEntity.type == 'food' && occupyEntity.type == 'player') {
-                                let playerHead = getEntityHead(occupyEntity);
-                                let playerHeadPosition = getSegmentPosition(playerHead);
-                                // console.log(playerHeadPosition);
-                                // console.log(newPosition);
-                                // console.log(isFree);
-                                if (equalPositions(playerHeadPosition, newPosition)) {
-                                    occupyEntity.hasEaten += FOOD_LENGTH;
+                        entitiesToDeleteMonad.chain(entitiesToDelete => {
+                            newEntities = entities.map(entityNode => {
+                                let entity = entityNode.value;
+                                //console.log(entity);
+                                if (entitiesToDelete.has(entity.ID)) {
+                                    entitiesToDelete.delete(entity.ID)
+                                    console.log("DELETE ID");
+                                    entity.body.map(segment => freeCell(field, getSegmentPosition(segment)));
+                                    return ;
                                 }
-                                entitiesToDelete.add(newEntity.ID);
-                                // console.log("I was here");
-                            }
-                            if (occupyEntity != null && newEntity.type == 'player' && occupyEntity.type == 'player') {
-                                alert("GAME OVER");
-                                throw "UROBOROS";
-                            }
+                                var newEntity = {...entity, body: entity.body.copy()};
+                                let prevHead = getEntityHead(newEntity);
+                                let newPosition = loopPosition(applyVelocity(
+                                    getSegmentPosition(prevHead),
+                                    newEntity.velocity,
+                                ));
 
-                            newEntity.body.appendLeft(createEntitySegment(entity, field, newPosition,));
-                            if (newEntity.type == 'player' && newEntity.hasEaten > 0) {
-                                newEntity.hasEaten -= 1;   
-                            } else {
-                                let oldTail = newEntity.body.popRight();
-                                freeCell(field, oldTail.position);
-                            }
+                                let occupyEntity = getCellStatus(field, newPosition);
+                                // console.log(cellStatus);
+                                if (occupyEntity != null && newEntity.type == 'player' && occupyEntity.type == 'food') {
+                                    newEntity.hasEaten += FOOD_LENGTH;
+                                    entitiesToDelete.add(occupyEntity.ID);
+                                }
+                                if (occupyEntity != null && newEntity.type == 'food' && occupyEntity.type == 'player') {
+                                    let playerHead = getEntityHead(occupyEntity);
+                                    let playerHeadPosition = getSegmentPosition(playerHead);
+                                    // console.log(playerHeadPosition);
+                                    // console.log(newPosition);
+                                    // console.log(isFree);
+                                    if (equalPositions(playerHeadPosition, newPosition)) {
+                                        occupyEntity.hasEaten += FOOD_LENGTH;
+                                    }
+                                    entitiesToDelete.add(newEntity.ID);
+                                    // console.log("I was here");
+                                }
+                                if (occupyEntity != null && newEntity.type == 'player' && occupyEntity.type == 'player') {
+                                    // alert("GAME OVER");
+                                    throw "UROBOROS";
+                                }
 
-                            newEntity.body = newEntity.body.map(segment => {
-                                occupyCell(newEntity, field, getSegmentPosition(segment));
-                                return segment;
+                                newEntity.body.appendLeft(createEntitySegment(entity, field, newPosition,));
+                                if (newEntity.type == 'player' && newEntity.hasEaten > 0) {
+                                    newEntity.hasEaten -= 1;   
+                                } else {
+                                    let oldTail = newEntity.body.popRight();
+                                    freeCell(field, oldTail.position);
+                                }
+
+                                newEntity.body = newEntity.body.map(segment => {
+                                    occupyCell(newEntity, field, getSegmentPosition(segment));
+                                    return segment;
+                                });
+                                return new Node(newEntity, entityNode.prev, entityNode.next);
                             });
-                            return new Node(newEntity, entityNode.prev, entityNode.next);
+                            return EntitiesToDeleteMonad(entitiesToDelete);
                         });
                         return FieldMonad(field);
                     });
                     return newEntities;
                 };
 
-                const collisionDetection = (entity, field) => 
-                    entities.map(entity => {
-                        
-
-                        return entity;
-                    });
-                
                 const createNewFood = (entities, fieldMonad) => {
                     // console.log(entities);
                     var newEntities = entities.copy();
@@ -449,9 +512,9 @@
 
                 const gameUpdate = composeSystems([
                     state => inputSystem(state, inputMaybe),
-                    state => physics(state, fieldMonad),
+                    state => physicsAndLogic(state, fieldMonad, entitiesToDeleteMonad),
                     state => createNewFood(state, fieldMonad),
-                    state => collisionDetection(state, fieldMonad),
+                    // state => collisionDetection(state, fieldMonad),
                     state => renderGameState(state, canvasMonad),
                 ]);
 

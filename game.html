@@ -141,18 +141,17 @@
                         return value;
                     }
                 }
-
+                const createPosition = (x, y) => ({x: x, y: y,});
 
                 const FPS_DIVIDER = 5;
-                const START_X = 3;
-                const START_Y = 3;
+                const START_POSITION = createPosition(3, 3);
                 const START_LENGTH = 3;
                 
                 const FOOD_AMOUNT = 2;
                 const FOOD_LENGTH = 7;
-                const FOOD_LENGTH_MAX = 5;
+                const FOOD_LENGTH_MAX = 20;
                 const FOOD_LENGTH_MIN = 3;
-                const WILL_TO_CHANGE = 20;
+                const WILL_TO_CHANGE = 1;
                 // 
                 const FIELD_SIDE = 40;
                 const CELL_SIDE =  20;
@@ -163,7 +162,7 @@
 
                 const isFree = Array(FIELD_SIDE).fill().map(() => Array(FIELD_SIDE).fill(null));
                 const gameCanvas = document.getElementById("gameCanvas");
-                const createPosition = (x, y) => ({x: x, y: y,});
+
                 const ALL_INPUTS = {
                     ArrowUp: createPosition(0, -1),
                     ArrowDown: createPosition(0, 1),
@@ -259,8 +258,11 @@
                 var nextIdGetter = getNextId();
 
                 const pickAvailable = availableDirsL => {
+                    if (availableDirsL.length == 0) {
+                        return createPosition(1, 0);
+                    }
                     var r = randInt(0, availableDirsL.length);
-                    console.log(r);
+                    // console.log(r);
                     return availableDirsL[r];
                 };
 
@@ -319,7 +321,7 @@
                     let next = entitySegment.next;
 
                     let appliedVelocity = applyVelocity(getSegmentPosition(entitySegment), velocity);
-                    // console.log(equalPositions(loopPosition(appliedVelocity), getSegmentPosition(next)))
+                    // // console.log(equalPositions(loopPosition(appliedVelocity), getSegmentPosition(next)))
                     return (equalPositions(loopPosition(appliedVelocity), getSegmentPosition(next)));
                     
                 }; 
@@ -379,10 +381,10 @@
                         entitiesToDeleteMonad.chain(entitiesToDelete => {
                             newEntities = entities.map(entityNode => {
                                 let entity = entityNode.value;
-                                //console.log(entity);
+                                //// console.log(entity);
                                 if (entitiesToDelete.has(entity.ID)) {
                                     entitiesToDelete.delete(entity.ID)
-                                    console.log("DELETE ID");
+                                    // console.log("DELETE ID");
                                     entity.body.map(segment => freeCell(field, getSegmentPosition(segment)));
                                     return ;
                                 }
@@ -394,7 +396,7 @@
                                 ));
 
                                 let occupyEntity = getCellStatus(field, newPosition);
-                                // console.log(cellStatus);
+                                // // console.log(cellStatus);
                                 if (occupyEntity != null && newEntity.type == 'player' && occupyEntity.type == 'food') {
                                     newEntity.hasEaten += FOOD_LENGTH;
                                     entitiesToDelete.add(occupyEntity.ID);
@@ -402,14 +404,14 @@
                                 if (occupyEntity != null && newEntity.type == 'food' && occupyEntity.type == 'player') {
                                     let playerHead = getEntityHead(occupyEntity);
                                     let playerHeadPosition = getSegmentPosition(playerHead);
-                                    // console.log(playerHeadPosition);
-                                    // console.log(newPosition);
-                                    // console.log(isFree);
+                                    // // console.log(playerHeadPosition);
+                                    // // console.log(newPosition);
+                                    // // console.log(isFree);
                                     if (equalPositions(playerHeadPosition, newPosition)) {
                                         occupyEntity.hasEaten += FOOD_LENGTH;
                                     }
                                     entitiesToDelete.add(newEntity.ID);
-                                    // console.log("I was here");
+                                    // // console.log("I was here");
                                 }
                                 if (occupyEntity != null && newEntity.type == 'player' && occupyEntity.type == 'player') {
                                     // alert("GAME OVER");
@@ -429,9 +431,10 @@
                                 if (newEntity.type == "food") {
                                     newEntity.changeWill++;
                                     if (newEntity.changeWill >= WILL_TO_CHANGE) {
-                                        let newWays = availableDirs.filter(direction => !isOppositeDirection(getEntityHead(newEntity), direction));
-                                        console.log(availableDirs);
-                                        console.log(newWays);
+                                        let newWays = availableDirs.filter(direction => !isOppositeDirection(getEntityHead(newEntity), direction) && 
+                                            getCellStatus(field, loopPosition(applyVelocity(newPosition, direction))) == null);
+                                        // console.log(availableDirs);
+                                        // console.log(newWays);
                                         newEntity.velocity = pickAvailable(newWays);
                                         newEntity.changeWill = 0;
                                     }
@@ -451,7 +454,7 @@
                 };
 
                 const createNewFood = (entities, fieldMonad) => {
-                    // console.log(entities);
+                    // // console.log(entities);
                     var newEntities = entities.copy();
                     fieldMonad.chain(field => {
                         if (newEntities.length-1 < FOOD_AMOUNT) {
@@ -468,10 +471,25 @@
                 const properColorComponent = component => Math.max(component, 0);
                 const darkenColor = (rgb) =>
                     rgb.map(component => properColorComponent(component-SHADE));
+                const stepShadeColor = rgb =>
+                    rgb.map(component => properColorComponent(component-1));
                 const brightenColor = rgb =>
                     rgb.map(component => properColorComponent(component+SHADE));
-                const SNAKE_COLOR = [SHADE, 150, SHADE]
-                const FOOD_COLOR = [250, SHADE, SHADE]
+                const stepShadeColorByComponent = (mode, rgb) => {
+                    let newRgb = rgb.map(x => x);    
+                    if (newRgb[mode[0]] < 255) {
+                        newRgb[mode[0]] += 3;
+                        if (mode[0] > 0) {
+                            newRgb[mode[0]-1] -= 3;
+                        }
+                    } else {
+                        mode[0] += 1;
+                    }
+
+                    return newRgb;
+                };
+                const SNAKE_COLOR = [0, 0, 0]
+                const FOOD_COLOR = [250, 140, 140]
                 const colorToString = rgb => `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`
                 const shadeColor = (segmentId, color) => {
                     if (segmentId == 0) {
@@ -493,8 +511,10 @@
                                 scoreField.innerHTML = `${entity.body.length-START_LENGTH}`;
                             }
                             var segmentId = 0;
+                            var mode = [0];
                             entity.body.map(segment => {
-                                canvasContext.fillStyle = colorToString(shadeColor(segmentId, baseColor));
+                                baseColor = stepShadeColorByComponent(mode, baseColor);
+                                canvasContext.fillStyle = colorToString(baseColor);
                                 canvasContext.fillRect(segment.value.position.x*CELL_SIDE, segment.value.position.y*CELL_SIDE, CELL_SIDE, CELL_SIDE);
                                 segmentId++;
                                 return segment;
@@ -541,7 +561,7 @@
                 };
 
                 var entities = new LinkedList(
-                    createPlayer(fieldMonad.get("?"), createPosition(START_X, START_Y), START_LENGTH),
+                    createPlayer(fieldMonad.get(), START_POSITION, START_LENGTH),
                 );
 
                 var count = 0;
